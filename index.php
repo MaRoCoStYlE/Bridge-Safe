@@ -1,34 +1,54 @@
-v<?php
-/* ----------  MINI-SAAS BRIDGE  ---------- */
-$shopB = $_ENV['SHOP_B_DOMAIN'] ?? 'merveille.store';
-$endpoint = "https://{$shopB}/cart/add?return_to=/checkout";
+const express = require('express');
+const axios = require('axios');
+const cors = require('cors');
+const helmet = require('helmet');
+const { RateLimiterMemory } = require('rate-limiter-flexible');
 
-/* récupère le corps POST brut */
-$post = file_get_contents('php://input');
-if (empty($post)) { http_response_code(400); exit('No body'); }
+const app = express();
+app.use(helmet());
+app.use(cors({ origin: false })); // bloque tout referer
+app.use(express.json());
 
-/* envoi vers Shopify B (zero headers leak) */
-$ch = curl_init($endpoint);
-curl_setopt_array($ch, [
-    CURLOPT_POST           => true,
-    CURLOPT_POSTFIELDS     => $post,
-    CURLOPT_HTTPHEADER     => [
-        'Content-Type: application/x-www-form-urlencoded',
-        'Content-Length: ' . strlen($post),
-        'User-Agent: Shopify-Bridge/1.0'
-    ],
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_HEADER         => true,
-    CURLOPT_FOLLOWLOCATION => false,
-    CURLOPT_TIMEOUT        => 15
-]);
-$response = curl_exec($ch);
-$info     = curl_getinfo($ch);
-curl_close($ch);
+const rateLimiter = new RateLimiterMemory({
+  keyPrefix: 'api',
+  points: 10,
+  duration: 60,
+});
 
-/* renvoie la 302 */
-http_response_code($info['http_code']);
-$headers = explode("\r\n", $response);
-foreach ($headers as $h) if (stripos($h, 'Location:') === 0) header($h);
-exit;
-?>
+const STORE_B_DOMAIN = 'https://merveille.store';
+const STORE_B_CART_ADD = `${STORE_B_DOMAIN}/cart/add.js`;
+
+app.post('/create-checkout', async (req, res) => {
+  try {
+    await rateLimiter.consume(req.ip);
+
+    const { items } = req.body; // [{ id: 123456789, quantity: 1 }, ...]
+
+    if (!items || !Array.isArray(items)) return res.status(400).send('Invalid items');
+
+    const formData = new URLSearchParams();
+    items.forEach(item => {
+      formData.append('id[]', item.id);
+      formData.append('quantity[]', item.quantity);
+    });
+
+    const response = await axios.post(STORE_B_CART_ADD, formData.toString(), {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0 (compatible; AgentFlow/1.0)',
+      },
+      maxRedirects: 0,
+      validateStatus: (status) => status >= 200 && status < 400,
+    });
+
+    const redirectUrl = response.headers.location || `${STORE_B_DOMAIN}/checkout`;
+    res.redirect(303, redirectUrl);
+  } catch (err) {
+    console.error(err);
+    res.status(429).send('Rate limited or error');
+  }
+});
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log('AgentFlow bridge running');
+});
