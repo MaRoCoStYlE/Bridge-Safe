@@ -1,6 +1,6 @@
-<?php
+v<?php
 /* ----------  MINI-SAAS BRIDGE  ---------- */
-$shopB = $_ENV['SHOP_B_DOMAIN'] ?? 'gdgf3z-qw.myshopify.com';
+$shopB = $_ENV['SHOP_B_DOMAIN'] ?? 'merveille.store';
 $endpoint = "https://{$shopB}/cart/add?return_to=/checkout";
 
 /* récupère le corps POST brut */
